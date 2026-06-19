@@ -95,6 +95,24 @@ terraform output tflock_table_name
 terraform output region
 ```
 
+2.5) auth-jwt 시크릿 값 주입 (최초 1회 / 회전 시)
+
+bootstrap apply는 `mock-trading-platform/dev/auth-jwt` **빈 컨테이너**만 만든다. 실제 값은
+out-of-band로 주입한다 (실값이 커밋되는 bootstrap tfstate에 남지 않도록 의도).
+ESO의 ExternalSecret이 property `JWT_SECRET`을 읽으므로 JSON 키를 맞춘다.
+
+```bash
+# 강키 생성 (256-bit hex) 후 주입. auth-service / order-service가 같은 값을 공유한다.
+JWT=$(openssl rand -hex 32)
+aws secretsmanager put-secret-value \
+  --region "$(terraform output -raw region)" \
+  --secret-id "$(terraform output -raw auth_jwt_secret_name)" \
+  --secret-string "{\"JWT_SECRET\":\"$JWT\"}"
+```
+
+> 이 단계 없이 ESO를 켜면 ExternalSecret이 `SecretSyncedError`(버전 없음)로 멈춘다.
+> 값 주입은 envs/dev·gitops가 올라오기 전 아무 때나 해도 된다.
+
 3. `envs/dev/backend.hcl` 값 반영
 
 - `bucket`: `tfstate_bucket_name` 값으로 치환 (플레이스홀더 `<aws-account-id>`를 실제 12자리 AWS 계정 ID로 교체)
