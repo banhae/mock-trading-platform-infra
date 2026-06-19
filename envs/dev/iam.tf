@@ -145,6 +145,72 @@ resource "aws_iam_role_policy_attachment" "ebs_csi" {
 }
 
 # -----------------------------------------------------------------------------
+# External Secrets Operator (ESO) IRSA Role + Policy
+#
+# Trust policy: external-secrets:external-secrets SA만 assume 가능.
+# IAM policy: AWS Secrets Manager의 mock-trading-platform/dev/auth-jwt-* 시크릿만 읽기 허용
+#   (auth-jwt 범위 한정 — DB/NATS 확장 시 resources에 항목 추가).
+# Helm 설치(ESO)와 SecretStore/ExternalSecret은 mock-trading-platform-gitops에서 수행하며,
+# ESO ServiceAccount에 이 role ARN을 eks.amazonaws.com/role-arn 어노테이션으로 단다.
+#
+# 시크릿 실값(mock-trading-platform/dev/auth-jwt)은 cost-saving destroy에 영향받지 않도록
+# 영속 bootstrap 단계에서 생성한다(이 role과 별개 lifecycle).
+#
+# 이름 기반 role이라 클러스터 destroy/recreate 후에도 ARN이 안정적이다.
+# -----------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "external_secrets_assume" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.eks.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")}:sub"
+      values   = ["system:serviceaccount:external-secrets:external-secrets"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "external_secrets" {
+  name               = "${var.cluster_name}-external-secrets-role"
+  assume_role_policy = data.aws_iam_policy_document.external_secrets_assume.json
+}
+
+data "aws_iam_policy_document" "external_secrets" {
+  statement {
+    sid = "ReadAuthJwtSecret"
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+    ]
+    # Secrets Manager는 이름 뒤에 "-" + 랜덤 6자를 붙인다.
+    # "?"는 정확히 1자 매칭이므로 auth-jwt-?????? 는 그 한 시크릿만 잡고,
+    # "auth-jwt-backup" 같은 다른 이름 시크릿은 배제한다("*"는 그것까지 매칭).
+    # 6자 와일드카드라 시크릿 destroy/recreate(suffix 변경)에도 안정적이다.
+    resources = [
+      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:mock-trading-platform/dev/auth-jwt-??????",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "external_secrets" {
+  name   = "${var.cluster_name}-external-secrets-secretsmanager"
+  role   = aws_iam_role.external_secrets.id
+  policy = data.aws_iam_policy_document.external_secrets.json
+}
+
+# -----------------------------------------------------------------------------
 # GitHub Actions OIDC Provider
 #
 # GitHub의 OIDC issuer를 AWS에 등록하여 sts:AssumeRoleWithWebIdentity 가능하게 함.

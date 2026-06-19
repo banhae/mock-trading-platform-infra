@@ -52,6 +52,11 @@ output "ebs_csi_role_arn" {
   value       = aws_iam_role.ebs_csi.arn
 }
 
+output "external_secrets_role_arn" {
+  description = "IAM role ARN for External Secrets Operator ServiceAccount annotation (eks.amazonaws.com/role-arn)"
+  value       = aws_iam_role.external_secrets.arn
+}
+
 output "github_actions_role_arn" {
   description = "IAM role ARN that mock-trading-platform-app GitHub Actions assumes via OIDC to push to ECR"
   value       = aws_iam_role.github_actions_app.arn
